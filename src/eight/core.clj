@@ -64,22 +64,12 @@
 (defn dot-prod-row [r1 r2]
   (apply + (map * r1 r2)))
 
-(defn mult-rows [rs1 rs2]
+(defn dot-prod-square [rs1 rs2]
   (apply + (map dot-prod-row rs1 rs2)))
 
 (defn cos-of-freq [f]
   (fn [x]
     (Math/cos (/ (* x f Math/PI) 8.0))))
-
-(defn norm-cos-of-freq [f]
-  (fn [x]
-    (+ 64 (* 63 ((cos-of-freq f) x)))))
-
-(defn cos2d-of-freqs [fx fy]
-  (fn [x y]
-    (/ (+ ((cos-of-freq fx) x)
-          ((cos-of-freq fy) y))
-       2)))
 
 (defn make-cos-row [fx]
     (mapv (cos-of-freq fx)
@@ -91,31 +81,36 @@
                (make-cos-row fy)))
         (range 0.5 8.0)))
 
+(defn square-doseq [f]
+  (doseq [x (range 0 8)
+          y (range 0 8)]
+    (f x y)))
+
 (defn draw-bases []
-  (doseq [fx (range 0 8)
-          fy (range 0 8)]
-    (draw-square (make-2d-cos-square fx fy) [(* 10 fx) (* 10 fy)])))
+  (square-doseq
+    (fn [fx fy]
+      (draw-square (make-2d-cos-square fx fy) [(* 10 fx) (* 10 fy)]))))
 
-(def basis-functions (into [] (for [fy (range 0 8)]
-                       (into [] (for [fx (range 0 8)]
-                         (make-2d-cos-square fx fy))))))
+(defn square-map [f]
+  (into [] (for [y (range 0 8)]
+    (into [] (for [x (range 0 8)]
+      (f x y))))))
 
+(def basis-functions
+  (square-map make-2d-cos-square))
+
+;; takes a square of intensity values,
+;; returns a square of frequency coefficients.
 (defn decompose-square [square]
-  (into [] (for [fy (range 0 8)]
-    (into [] (for [fx (range 0 8)]
+  (square-map
+    (fn [fx fy]
       (* (if (= fx 0)
            (Math/sqrt (/ 1 8))
            (Math/sqrt (/ 2 8)))
          (if (= fy 0)
            (Math/sqrt (/ 1 8))
            (Math/sqrt (/ 2 8)))
-         (mult-rows square (get-in basis-functions [fx fy]))))))))
-
-(defn add-rows [r1 r2]
-  (mapv + r1 r2))
-
-(defn add-squares [s1 s2]
-  (mapv add-rows s1 s2))
+         (dot-prod-square square (get-in basis-functions [fx fy]))))))
 
 (defn norm-row [a r]
   (mapv #(* a %) r))
@@ -123,9 +118,13 @@
 (defn norm-square [a s]
   (mapv #(norm-row a %) s))
 
+;; this takes a square of frequency coefficients
+;; and returns a square of basis functions
+;; scaled by the coefficients.
+;; so it's a nasty 8x8 square of 8x8 squares...
 (defn coefs-by-bases [coefs]
-  (into [] (for [fy (range 0 8)]
-    (into [] (for [fx (range 0 8)]
+  (square-map
+    (fn [fx fy]
       (norm-square (* (if (= fx 0)
                         (Math/sqrt (/ 1 8))
                         (Math/sqrt (/ 2 8)))
@@ -133,11 +132,11 @@
                         (Math/sqrt (/ 1 8))
                         (Math/sqrt (/ 2 8)))
                       (get-in coefs [fx fy]))
-                   (get-in basis-functions [fx fy])))))))
+                   (get-in basis-functions [fx fy])))))
 
 ;; quantization
 
-(def good-quant-table
+(def quant-table
   [ [16  11  10  16  24  40  51  61]
     [12  12  14  19  26  58  60  55]
     [14  13  16  24  40  57  69  56]
@@ -147,31 +146,35 @@
     [49  64  78  87  103 121 120 101]
     [72  92  95  98  112 100 103 99] ])
 
-;; take something [-8, 8] -> [-127, 127]
+;; take something floating point [-8, 8] -> integer [-127, 127]
 (defn eight-bit [number]
   (if (pos? number)
-    (int (+  0.000001 (* 254 (/ number 16))))
-    (int (+ -0.000001 (* 254 (/ number 16))))))
+    (int (+  0.000001 (* 15.875 number)))
+    (int (+ -0.000001 (* 15.875 number)))))
 
-;; [-127, 127] -> [-8, 8]
+;; integer [-127, 127] -> floating point [-8, 8]
 (defn de-eight-bit [number]
   (/ number 15.875))
 
 (defn quant-coefs [coefs]
-  (into [] (for [fy (range 0 8)]
-    (into [] (for [fx (range 0 8)]
+  (square-map
+    (fn [fx fy]
       (eight-bit (/ (get-in coefs [fx fy])
-                    (de-eight-bit (get-in good-quant-table [fx fy])))))))))
+                    (de-eight-bit (get-in quant-table [fx fy])))))))
 
 (defn de-quant-coefs [coefs]
-  (into [] (for [fy (range 0 8)]
-    (into [] (for [fx (range 0 8)]
-      (de-eight-bit (* (de-eight-bit (get-in good-quant-table [fx fy]))
-                       (get-in coefs [fy fx]))))))))
+  (square-map
+    (fn [fx fy]
+      (de-eight-bit (* (de-eight-bit (get-in quant-table [fx fy]))
+                       (get-in coefs [fy fx]))))))
 
-;; decomp onto bases, now you have a square of coefs
-;; coefs-by-bases turns those coefs into the bases you need to add up
-;; add-square-of-squares turns those squares into an image
+;; "recomposition"
+
+(defn add-rows [r1 r2]
+  (mapv + r1 r2))
+
+(defn add-squares [s1 s2]
+  (mapv add-rows s1 s2))
 
 (defn add-row-of-squares [row-of-sqs]
   (reduce add-squares row-of-sqs))
@@ -187,6 +190,7 @@
        coefs-by-bases
        add-square-of-squares))
 
+;; square is a single 8x8 subblock
 (defn draw-before-and-after [square]
   (draw-square square [0 0])
   (draw-square (decomp-then-recomp square) [10 10]))
@@ -194,24 +198,20 @@
 ;; thanks http://samrat.me/blog/2014/04/image-diffing-in-clojure/
 ;; and    http://nakkaya.com/2010/03/23/steganography-with-clojure-hiding-text-in-images/
 
-(defn read-image
-    [path]
-    (ImageIO/read (io/file path)))
+(defn read-image [path]
+  (ImageIO/read (io/file path)))
 
-(defn write-image
-    [img path file-format]
-    (ImageIO/write img file-format (io/file path)))
+(defn write-image [img path file-format]
+  (ImageIO/write img file-format (io/file path)))
 
-(defn px->argb
-    [px]
-    (let [a (bit-and (bit-shift-right px 24) 0xff)
-          r (bit-and (bit-shift-right px 16) 0xff)
-          g (bit-and (bit-shift-right px 8) 0xff)
-          b (bit-and px 0xff)]
-      [a r g b]))
+(defn px->argb [px]
+  (let [a (bit-and (bit-shift-right px 24) 0xff)
+        r (bit-and (bit-shift-right px 16) 0xff)
+        g (bit-and (bit-shift-right px 8) 0xff)
+        b (bit-and px 0xff)]
+    [a r g b]))
 
-(defn argb->px
-  [[a r g b]]
+(defn argb->px [[a r g b]]
   (bit-or (bit-shift-left a 24)
           (bit-or (bit-shift-left r 16)
                   (bit-or (bit-shift-left g 8)
