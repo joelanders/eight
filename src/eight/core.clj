@@ -182,13 +182,25 @@
 (defn add-square-of-squares [sq-of-sqs]
   (reduce add-squares (map add-row-of-squares sq-of-sqs)))
 
+;; after the quantization & de-quantization, values can
+;; fall outside the [-1,1] range.
+(defn clip-square [square]
+  (square-map
+    (fn [x y]
+      (let [val (get-in square [y x])]
+        (cond
+          (< val -1.0) -1.0
+          (> val  1.0)  1.0
+          :else         val)))))
+
 (defn decomp-then-recomp [square]
   (->> square
        decompose-square
        quant-coefs
        de-quant-coefs
        coefs-by-bases
-       add-square-of-squares))
+       add-square-of-squares
+       clip-square))
 
 ;; square is a single 8x8 subblock
 (defn draw-before-and-after [square]
@@ -240,5 +252,5 @@
       (subblock-pixels x y)
       [(* 8 x) (* 8 y)])
     (draw-square
-      (norm-square 0.90 (decomp-then-recomp (subblock-pixels x y)))
+      (decomp-then-recomp (subblock-pixels x y))
       [(+ 65 (* 8 x)) (* 8 y)])))
